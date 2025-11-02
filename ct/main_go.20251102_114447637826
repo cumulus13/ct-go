@@ -1,0 +1,130 @@
+package main
+
+import (
+	"bufio"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/atotto/clipboard"
+	"github.com/gen2brain/beeep"
+)
+
+func getText() (string, error) {
+	return clipboard.ReadAll()
+}
+
+func setText(text string) error {
+	return clipboard.WriteAll(text)
+}
+
+func readFile(filename string, lineNumber []int, withoutLineNumber bool) (string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for i := 0; scanner.Scan(); i++ {
+		line := scanner.Text()
+		if len(lineNumber) > 0 {
+			for _, num := range lineNumber {
+				if i == num-1 {
+					if withoutLineNumber {
+						lines = append(lines, line)
+					} else {
+						lines = append(lines, fmt.Sprintf("%d. %s", num, line))
+					}
+				}
+			}
+		} else {
+			lines = append(lines, line)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+
+	return strings.Join(lines, "\n"), nil
+}
+
+func sendGrowlNotification(title string, message string) {
+	url := "http://localhost:23053/"
+	data := fmt.Sprintf(`{"title": "%s", "description": "%s"}`, title, message)
+	req, err := http.NewRequest("POST", url, strings.NewReader(data))
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer resp.Body.Close()
+}
+
+func main() {
+	lineNumber := flag.Int("l", 0, "Line number")
+	lineNumbers := flag.String("line", "", "Line numbers separated by comma")
+	withoutLineNumberPrint := flag.Bool("w", false, "Copy string without line number")
+	flag.Parse()
+
+	var lineNumbersSlice []int
+	if *lineNumbers != "" {
+		for _, num := range strings.Split(*lineNumbers, ",") {
+			n, err := strconv.Atoi(num)
+			if err != nil {
+				log.Fatal(err)
+			}
+			lineNumbersSlice = append(lineNumbersSlice, n)
+		}
+	}
+
+	if flag.NArg() == 0 {
+		flag.Usage()
+		return
+	}
+
+	for _, filename := range flag.Args() {
+		var data string
+		var err error
+		if len(lineNumbersSlice) > 0 || *lineNumber != 0 {
+			data, err = readFile(filename, lineNumbersSlice, *withoutLineNumberPrint)
+		} else {
+			data, err = readFile(filename, nil, false)
+		}
+
+		if err != nil {
+			log.Printf("Error reading file: %v\n", err)
+			continue
+		}
+
+		err = setText(data)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		fmt.Println("Successfully set clipboard with:")
+		fmt.Println(data)
+		fmt.Println("-------------------------- END OF LINE -----------")
+
+		// Notifikasi Windows
+		err = beeep.Notify("Clipboard", "Teks berhasil disalin", "icon.png")
+		if err != nil {
+			log.Println(err)
+		}
+
+		// Notifikasi Growl
+		sendGrowlNotification("Clipboard", "Teks berhasil disalin")
+	}
+}

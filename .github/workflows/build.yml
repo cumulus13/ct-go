@@ -1,0 +1,92 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Get dependencies
+      run: |
+        go mod download
+        go mod tidy
+
+    - name: Build
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: |
+        mkdir -p build
+        if [ "$GOOS" = "windows" ]; then
+          go build -ldflags="-s -w" -o build/ct-${{ matrix.goos }}-${{ matrix.goarch }}.exe ./ct
+        else
+          go build -ldflags="-s -w" -o build/ct-${{ matrix.goos }}-${{ matrix.goarch }} ./ct
+        fi
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ct-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: build/*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: artifacts
+
+    - name: Create release archives
+      run: |
+        mkdir -p release
+        cd artifacts
+        for dir in */; do
+          dirname="${dir%/}"
+          cd "$dirname"
+          if ls *.exe 1> /dev/null 2>&1; then
+            zip "../../release/${dirname}.zip" *
+          else
+            tar czf "../../release/${dirname}.tar.gz" *
+          fi
+          cd ..
+        done
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release/*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
